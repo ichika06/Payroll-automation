@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { LogIn, LogOut } from "lucide-react"
+import { LogIn, LogOut, AlertCircle } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import {
   getEmployees,
@@ -25,6 +25,7 @@ export default function LogsPage() {
   const [activeLog, setActiveLog] = useState(null)
   const [loading, setLoading] = useState(true)
   const [minHours, setMinHours] = useState(8)
+  const [markingAbsent, setMarkingAbsent] = useState(null)
 
   useEffect(() => {
     fetchData()
@@ -171,6 +172,31 @@ export default function LogsPage() {
     )
   }
 
+  async function handleMarkAbsent(logId) {
+    if (!confirm("Mark this employee as absent for this shift?")) {
+      return
+    }
+
+    setMarkingAbsent(logId)
+    try {
+      await updateTimeLog(logId, {
+        isAbsent: true,
+        markedAbsentAt: Timestamp.now(),
+      })
+      await fetchData()
+      toast.success("Employee marked as absent", {
+        description: "This absence will be deducted from their next payroll.",
+      })
+    } catch (error) {
+      console.error("Error marking absent:", error)
+      toast.error("Failed to mark as absent", {
+        description: error?.message || "Please try again.",
+      })
+    } finally {
+      setMarkingAbsent(null)
+    }
+  }
+
   return (
     <div className="p-8">
       <h1 className="mb-8 text-3xl font-bold text-slate-900">Time Logs</h1>
@@ -240,6 +266,7 @@ export default function LogsPage() {
                     <th className="pb-3 text-left font-medium text-slate-600">Hours</th>
                     <th className="pb-3 text-left font-medium text-slate-600">OT Hours</th>
                     <th className="pb-3 text-left font-medium text-slate-600">Status</th>
+                    <th className="pb-3 text-right font-medium text-slate-600">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -253,11 +280,37 @@ export default function LogsPage() {
                       <td className="py-4">
                         <span
                           className={`rounded-full px-3 py-1 text-sm ${
-                            log.timeOut ? "bg-slate-100 text-slate-700" : "bg-green-100 text-green-700"
+                            log.isAbsent
+                              ? "bg-red-100 text-red-700"
+                              : log.timeOut
+                                ? "bg-slate-100 text-slate-700"
+                                : "bg-green-100 text-green-700"
                           }`}
                         >
-                          {log.timeOut ? "Completed" : "Active"}
+                          {log.isAbsent ? "Absent" : log.timeOut ? "Completed" : "Active"}
                         </span>
+                      </td>
+                      <td className="py-4 text-right">
+                        {!log.timeOut && !log.isAbsent && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleMarkAbsent(log.id)}
+                            disabled={markingAbsent === log.id}
+                          >
+                            {markingAbsent === log.id ? (
+                              <>
+                                <Spinner className="mr-2 h-3 w-3" />
+                                Marking...
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="mr-2 h-4 w-4" />
+                                Mark Absent
+                              </>
+                            )}
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}

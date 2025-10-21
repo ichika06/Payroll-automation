@@ -180,6 +180,58 @@ export async function getTimeLogs(employeeId = null) {
   }))
 }
 
+export async function getApprovedLeavesInRange(employeeId, startDate, endDate) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  if (!employeeId) {
+    return []
+  }
+
+  try {
+    const leavesCollection = collection(db, "leaveRequests")
+    const q = query(leavesCollection, where("employeeId", "==", employeeId))
+    const snapshot = await getDocs(q)
+
+    if (snapshot.empty) {
+      return []
+    }
+
+    const rangeStart = convertToDate(startDate)
+    const rangeEnd = convertToDate(endDate)
+
+    if (!rangeStart || !rangeEnd) {
+      return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+    }
+
+    const startTime = rangeStart.getTime()
+    const endTime = rangeEnd.getTime()
+
+    return snapshot.docs
+      .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+      .filter((leave) => {
+        if (leave.status && leave.status !== "approved") {
+          return false
+        }
+
+        const leaveStart = convertToDate(leave.startDate || leave.date || leave.fromDate)
+        const leaveEnd = convertToDate(leave.endDate || leave.date || leave.toDate || leave.startDate)
+
+        if (!leaveStart) {
+          return false
+        }
+
+        const leaveStartTime = leaveStart.getTime()
+        const leaveEndTime = leaveEnd ? leaveEnd.getTime() : leaveStartTime
+
+        return leaveEndTime >= startTime && leaveStartTime <= endTime
+      })
+  } catch (error) {
+    console.error("Error fetching leave requests:", error)
+    return []
+  }
+}
+
 export async function updateTimeLog(id, timeLogData) {
   const db = getFirebaseDb()
   if (!db) throw new Error("Firebase not initialized")
@@ -426,4 +478,30 @@ export async function markNotificationRead(notificationId) {
     read: true,
     readAt: Timestamp.now(),
   })
+}
+
+function convertToDate(value) {
+  if (!value) {
+    return null
+  }
+
+  if (typeof value.toDate === "function") {
+    return value.toDate()
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
+  }
+
+  if (typeof value === "number") {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  return null
 }

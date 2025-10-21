@@ -41,6 +41,8 @@ export default function EditEmployeePage({ params }) {
     hourlyRate: "",
     employmentType: "full-time",
     profilePhoto: "",
+    startingShift: "08:00",
+    endingShift: "17:00",
   })
   const [previewPhoto, setPreviewPhoto] = useState("")
   const [photoInputKey, setPhotoInputKey] = useState(() => Date.now())
@@ -71,6 +73,8 @@ export default function EditEmployeePage({ params }) {
         hourlyRate: data.hourlyRate != null ? String(data.hourlyRate) : "",
         employmentType: data.employmentType ?? "full-time",
         profilePhoto: data.profilePhoto ?? "",
+        startingShift: data.startingShift ?? "08:00",
+        endingShift: data.endingShift ?? "17:00",
       })
       setPreviewPhoto(data.profilePhoto ?? "")
       setPhotoInputKey(Date.now())
@@ -156,6 +160,8 @@ export default function EditEmployeePage({ params }) {
         hourlyRate: hourlyRateValue,
         employmentType: formData.employmentType,
         profilePhoto: formData.profilePhoto || null,
+        startingShift: formData.startingShift,
+        endingShift: formData.endingShift,
       }
 
       await updateEmployeeRecord(id, payload)
@@ -284,6 +290,30 @@ export default function EditEmployeePage({ params }) {
                     <SelectItem value="contract">Contract</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="startingShift">Starting Shift</Label>
+                <Input
+                  id="startingShift"
+                  name="startingShift"
+                  type="time"
+                  value={formData.startingShift}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="endingShift">Ending Shift</Label>
+                <Input
+                  id="endingShift"
+                  name="endingShift"
+                  type="time"
+                  value={formData.endingShift}
+                  onChange={handleChange}
+                  required
+                />
               </div>
             </div>
 
