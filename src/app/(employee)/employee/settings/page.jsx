@@ -12,6 +12,7 @@ import { useAuth } from "@/components/auth-provider"
 
 export default function EmployeeSettings() {
   const { user } = useAuth()
+  const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [message, setMessage] = useState({ type: "", text: "" })
@@ -21,8 +22,13 @@ export default function EmployeeSettings() {
     e.preventDefault()
     setMessage({ type: "", text: "" })
 
+    if (!currentPassword) {
+      setMessage({ type: "error", text: "Please enter your current password" })
+      return
+    }
+
     if (newPassword !== confirmPassword) {
-      setMessage({ type: "error", text: "Passwords do not match" })
+      setMessage({ type: "error", text: "New passwords do not match" })
       return
     }
 
@@ -31,11 +37,17 @@ export default function EmployeeSettings() {
       return
     }
 
+    if (currentPassword === newPassword) {
+      setMessage({ type: "error", text: "New password must be different from current password" })
+      return
+    }
+
     setLoading(true)
 
     try {
-      await changePassword(newPassword)
+      await changePassword(currentPassword, newPassword)
       setMessage({ type: "success", text: "Password changed successfully" })
+      setCurrentPassword("")
       setNewPassword("")
       setConfirmPassword("")
     } catch (error) {
@@ -80,6 +92,17 @@ export default function EmployeeSettings() {
               )}
 
               <div className="space-y-2">
+                <Label htmlFor="currentPassword">Current Password</Label>
+                <Input
+                  id="currentPassword"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="newPassword">New Password</Label>
                 <Input
                   id="newPassword"
@@ -91,7 +114,7 @@ export default function EmployeeSettings() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">Confirm New Password</Label>
                 <Input
                   id="confirmPassword"
                   type="password"

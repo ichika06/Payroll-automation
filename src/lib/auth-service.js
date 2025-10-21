@@ -4,6 +4,8 @@ import {
   signOut,
   updatePassword,
   onAuthStateChanged,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
 } from "firebase/auth"
 import { getFirebaseAuth } from "./firebase"
 import { addDoc, collection, query, where, getDocs, updateDoc, doc } from "firebase/firestore"
@@ -80,14 +82,30 @@ export async function signOutUser() {
 }
 
 // Change password
-export async function changePassword(newPassword) {
+export async function changePassword(currentPassword, newPassword) {
   const auth = getFirebaseAuth()
   if (!auth) throw new Error("Firebase not initialized")
 
   const user = auth.currentUser
   if (!user) throw new Error("No user logged in")
 
-  await updatePassword(user, newPassword)
+  if (!user.email) throw new Error("User email not found")
+
+  try {
+    // Reauthenticate user with current password
+    const credential = EmailAuthProvider.credential(user.email, currentPassword)
+    await reauthenticateWithCredential(user, credential)
+
+    // Update password after successful reauthentication
+    await updatePassword(user, newPassword)
+  } catch (error) {
+    if (error?.code === "auth/wrong-password") {
+      throw new Error("Current password is incorrect")
+    } else if (error?.code === "auth/invalid-credential") {
+      throw new Error("Current password is incorrect")
+    }
+    throw new Error(`Failed to change password: ${error.message}`)
+  }
 }
 
 // Get current user
