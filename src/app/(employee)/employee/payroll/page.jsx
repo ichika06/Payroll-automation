@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react"
 import { useAuth } from "@/components/auth-provider"
-import { getPayrollsByEmployee, getEmployee, getCashoutRequests } from "@/lib/firebase-service"
+import { getPayrollsByEmployee, getEmployee, getCashoutRequests, getLeavePaymentsByEmployeeAndPayroll } from "@/lib/firebase-service"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { PhilippinePeso, Calendar, TrendingUp, Wallet } from "lucide-react"
+import { PhilippinePeso, Calendar, TrendingUp, Wallet, FileText } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import PaymentModal from "@/components/payment-modal"
+import { generatePayslipPDF } from "@/lib/payslip-export"
 import { toast } from "sonner"
 
 export default function EmployeePayroll() {
@@ -31,6 +33,9 @@ export default function EmployeePayroll() {
   }, [])
   const [paymentModalOpen, setPaymentModalOpen] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState(0)
+  const [payslipPayroll, setPayslipPayroll] = useState(null)
+  const [downloadingPayslip, setDownloadingPayslip] = useState(false)
+  const [leavePaymentRecords, setLeavePaymentRecords] = useState([])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -105,6 +110,85 @@ export default function EmployeePayroll() {
 
   const getTotalEarnings = () => {
     return payrolls.filter((p) => p.status === "paid").reduce((total, p) => total + (p.netPay || 0), 0)
+  }
+
+  const formatCurrency = (value) => {
+    const formatter = new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency: "PHP",
+      minimumFractionDigits: 2,
+    })
+    return formatter.format(value ?? 0)
+  }
+
+  const toMoney = (value) => {
+    if (value == null) return 0
+    const numeric = typeof value === "number" ? value : Number.parseFloat(value)
+    if (!Number.isFinite(numeric)) return 0
+    return Number.parseFloat(numeric.toFixed(2))
+  }
+
+  const derivePayslipData = (payroll) => {
+    const attendanceSummary = payroll.attendanceSummary || {}
+
+    const regularPay = toMoney(
+      payroll.regularPay ??
+        (typeof payroll.regularHours === "number" && typeof payroll.hourlyRate === "number"
+          ? payroll.regularHours * payroll.hourlyRate
+          : 0),
+    )
+    const overtimePay = toMoney(payroll.overtimePay ?? 0)
+    const grossPay = toMoney(payroll.grossPay ?? regularPay + overtimePay)
+
+    let statutory = toMoney(payroll.statutoryDeductions ?? 0)
+    if (!statutory && grossPay) {
+      statutory = toMoney(grossPay * 0.05)
+    }
+
+    const absenceDeduction = toMoney(payroll.absenceDeduction ?? attendanceSummary.absenceDeduction ?? 0)
+    const leaveDeduction = toMoney(payroll.leaveDeduction ?? attendanceSummary.leaveDeduction ?? 0)
+
+    let attendanceDeduction = toMoney(
+      payroll.attendanceDeduction ?? attendanceSummary.totalAttendanceDeduction ?? absenceDeduction + leaveDeduction,
+    )
+    if (!attendanceDeduction && (absenceDeduction || leaveDeduction)) {
+      attendanceDeduction = toMoney(absenceDeduction + leaveDeduction)
+    }
+
+    const taxAmount = toMoney(payroll.tax ?? 0)
+    const totalDeductions = toMoney(taxAmount + statutory + attendanceDeduction)
+    const netPay = toMoney(payroll.netPay ?? grossPay - totalDeductions)
+
+    const periodLabel =
+      payroll.periodLabel && payroll.periodLabel.length > 0 ? payroll.periodLabel : payroll.period || "Current Period"
+
+    return {
+      employeeName: payroll.employeeName,
+      periodLabel,
+      hourlyRate: payroll.hourlyRate ?? 0,
+      regularPay,
+      overtimePay,
+      grossPay,
+      tax: taxAmount,
+      statutoryDeductions: statutory,
+      attendanceDeduction,
+      absenceDeduction,
+      leaveDeduction,
+      totalDeductions,
+      netPay,
+      attendanceSummary,
+      workingDays: attendanceSummary.workingDays ?? null,
+      workedDays: attendanceSummary.workedDays ?? null,
+      paidLeaveDays: attendanceSummary.paidLeaveDays ?? 0,
+      unpaidLeaveDays: attendanceSummary.unpaidLeaveDays ?? 0,
+      absenceDays: attendanceSummary.absenceDays ?? 0,
+      paidLeaveDates: attendanceSummary.paidLeaveDates || [],
+      unpaidLeaveDates: attendanceSummary.unpaidLeaveDates || [],
+      absenceDates: attendanceSummary.absenceDates || [],
+      dailyRate: attendanceSummary.dailyRate ?? toMoney((payroll.hourlyRate || 0) * 8),
+      coverage: attendanceSummary.periodRange || null,
+      leavePaymentRecords,
+    }
   }
 
   const getAvailableBalance = () => {
@@ -245,6 +329,47 @@ export default function EmployeePayroll() {
     }
   }
 
+  const handleOpenPayslip = (payroll) => {
+    setPayslipPayroll(payroll)
+    loadLeavePayments(payroll)
+  }
+
+  const loadLeavePayments = async (payroll) => {
+    if (!payroll) return
+    try {
+      const payments = await getLeavePaymentsByEmployeeAndPayroll(payroll.employeeId, payroll.id)
+      setLeavePaymentRecords(payments)
+    } catch (error) {
+      console.error("Error loading leave payments:", error)
+      setLeavePaymentRecords([])
+    }
+  }
+
+  const handleClosePayslip = () => {
+    setPayslipPayroll(null)
+    setDownloadingPayslip(false)
+  }
+
+  const handleDownloadPayslip = async () => {
+    if (!payslipPayroll) return
+
+    setDownloadingPayslip(true)
+    try {
+      const payslipData = derivePayslipData(payslipPayroll)
+      await generatePayslipPDF(payslipData)
+      toast.success("Payslip exported", {
+        description: "PDF downloaded successfully.",
+      })
+    } catch (error) {
+      console.error("Error generating payslip PDF:", error)
+      toast.error("Failed to export payslip", {
+        description: error?.message || "Please try again.",
+      })
+    } finally {
+      setDownloadingPayslip(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -262,7 +387,7 @@ export default function EmployeePayroll() {
         </div>
         <Button size="lg" onClick={handleQuickCashout} disabled={getAvailableBalance() < 100}>
           <Wallet className="mr-2 h-4 w-4" />
-          Request Cashout
+          Withdraw
         </Button>
       </div>
 
@@ -401,6 +526,16 @@ export default function EmployeePayroll() {
                         <p className="font-bold text-green-600">₱{payroll.netPay?.toFixed(2) || 0}</p>
                         <Badge variant={payroll.status === "paid" ? "default" : "secondary"}>{payroll.status}</Badge>
                       </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleOpenPayslip(payroll)}
+                          title="View Payslip"
+                        >
+                          <FileText className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -420,6 +555,151 @@ export default function EmployeePayroll() {
         onPaymentError={(error) => setMessage({ type: "error", text: error })}
         onPaymentLinkCreated={(linkId) => setLastPaymentLinkId(linkId)}
       />
+
+      {payslipPayroll && (
+        <Dialog open={Boolean(payslipPayroll)} onOpenChange={(open) => (open ? null : handleClosePayslip())}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Payslip</DialogTitle>
+              {payslipPayroll && (
+                <DialogDescription>
+                  {payslipPayroll.employeeName} · {payslipPayroll.periodLabel?.replace(/\n+/g, " ")}
+                </DialogDescription>
+              )}
+            </DialogHeader>
+
+            {payslipPayroll ? (
+              <div className="space-y-6">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Earnings</h3>
+                    <div className="mt-3 space-y-2 text-sm text-slate-700">
+                      <div className="flex items-center justify-between">
+                        <span>Regular Pay</span>
+                        <span>{formatCurrency(derivePayslipData(payslipPayroll).regularPay)}</span>
+                      </div>
+                      {derivePayslipData(payslipPayroll).overtimePay > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>Overtime Pay</span>
+                          <span>{formatCurrency(derivePayslipData(payslipPayroll).overtimePay)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>Gross Pay</span>
+                        <span>{formatCurrency(derivePayslipData(payslipPayroll).grossPay)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Deductions</h3>
+                    <div className="mt-3 space-y-2 text-sm text-slate-700">
+                      <div className="flex items-center justify-between">
+                        <span>Tax (10%)</span>
+                        <span>{formatCurrency(derivePayslipData(payslipPayroll).tax)}</span>
+                      </div>
+                      {derivePayslipData(payslipPayroll).statutoryDeductions > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>Statutory</span>
+                          <span>{formatCurrency(derivePayslipData(payslipPayroll).statutoryDeductions)}</span>
+                        </div>
+                      )}
+                      {derivePayslipData(payslipPayroll).absenceDeduction > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>Absences</span>
+                          <span>{formatCurrency(derivePayslipData(payslipPayroll).absenceDeduction)}</span>
+                        </div>
+                      )}
+                      {derivePayslipData(payslipPayroll).leaveDeduction > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>Unpaid Leave</span>
+                          <span>{formatCurrency(derivePayslipData(payslipPayroll).leaveDeduction)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>Total Deductions</span>
+                        <span>{formatCurrency(derivePayslipData(payslipPayroll).totalDeductions)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg bg-slate-900 px-4 py-3 text-slate-50">
+                  <span className="text-sm uppercase tracking-wider">Net Pay</span>
+                  <span className="text-lg font-semibold">{formatCurrency(derivePayslipData(payslipPayroll).netPay)}</span>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Attendance Summary</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <div className="flex items-center justify-between">
+                      <span>Working Days</span>
+                      <span>{derivePayslipData(payslipPayroll).workingDays ?? "–"}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Worked Days</span>
+                      <span>{derivePayslipData(payslipPayroll).workedDays ?? "–"}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Paid Leave Days</span>
+                      <span>
+                        {derivePayslipData(payslipPayroll).paidLeaveDays + 
+                          (leavePaymentRecords.length > 0 
+                            ? leavePaymentRecords.reduce((sum, r) => sum + (r.numberOfDays || 0), 0)
+                            : 0)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Unpaid Leave Days</span>
+                      <span>{derivePayslipData(payslipPayroll).unpaidLeaveDays}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Absence Days</span>
+                      <span>{derivePayslipData(payslipPayroll).absenceDays}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {leavePaymentRecords.length > 0 && (
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700">Leave Payments</h3>
+                    <div className="mt-3 space-y-2 text-sm text-slate-700">
+                      {leavePaymentRecords.map((record) => (
+                        <div key={record.id} className="flex items-center justify-between border-b pb-2 last:border-0">
+                          <div className="flex-1">
+                            <span className="block font-medium text-slate-800">{record.leaveType}</span>
+                            <span className="block text-xs text-slate-600">
+                              {record.numberOfDays} days @ ₱{record.ratePerDay?.toFixed(2) || 0}/day
+                            </span>
+                          </div>
+                          <span className="font-semibold text-slate-700">₱{record.amount?.toFixed(2) || 0}</span>
+                        </div>
+                      ))}
+                      <div className="border-t-2 border-slate-300 pt-2 mt-2">
+                        <div className="flex items-center justify-between font-bold text-slate-800">
+                          <span>Total Leave Payments</span>
+                          <span>₱{leavePaymentRecords.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600">Unable to load payslip details.</p>
+            )}
+
+            <DialogFooter>
+              <Button onClick={handleDownloadPayslip} disabled={downloadingPayslip || !payslipPayroll}>
+                {downloadingPayslip ? "Preparing PDF..." : "Download PDF"}
+              </Button>
+              <Button variant="outline" onClick={handleClosePayslip}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }

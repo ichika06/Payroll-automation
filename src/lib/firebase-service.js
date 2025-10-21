@@ -505,3 +505,63 @@ function convertToDate(value) {
 
   return null
 }
+
+// Leave Payment functions
+export async function addLeavePayment(leavePaymentData) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  const docRef = await addDoc(collection(db, "leavePayments"), {
+    ...leavePaymentData,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  })
+  return docRef.id
+}
+
+export async function getLeavePaymentsByEmployee(employeeId, options = {}) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  const paymentsQuery = query(
+    collection(db, "leavePayments"),
+    where("employeeId", "==", employeeId),
+    orderBy("date", "desc"),
+  )
+
+  const snapshot = await getDocs(paymentsQuery)
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+}
+
+export async function getLeavePaymentsByEmployeeAndPayroll(employeeId, payrollId) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  const paymentsQuery = query(
+    collection(db, "leavePayments"),
+    where("employeeId", "==", employeeId),
+    where("payrollId", "==", payrollId),
+  )
+
+  const snapshot = await getDocs(paymentsQuery)
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+}
+
+export async function updateLeavePayment(leavePaymentId, updateData) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  const paymentRef = doc(db, "leavePayments", leavePaymentId)
+  await updateDoc(paymentRef, {
+    ...updateData,
+    updatedAt: Timestamp.now(),
+  })
+}
+
+export async function deleteLeavePayment(leavePaymentId) {
+  const db = getFirebaseDb()
+  if (!db) throw new Error("Firebase not initialized")
+
+  await deleteDoc(doc(db, "leavePayments", leavePaymentId))
+}
+

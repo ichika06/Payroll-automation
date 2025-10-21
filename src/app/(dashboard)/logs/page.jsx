@@ -173,7 +173,7 @@ export default function LogsPage() {
   }
 
   async function handleMarkAbsent(logId) {
-    if (!confirm("Mark this employee as absent for this shift?")) {
+    if (!confirm("Mark this employee as NO SHOW for this shift?")) {
       return
     }
 
@@ -184,7 +184,7 @@ export default function LogsPage() {
         markedAbsentAt: Timestamp.now(),
       })
       await fetchData()
-      toast.success("Employee marked as absent", {
+      toast.success("Employee marked as NO SHOW", {
         description: "This absence will be deducted from their next payroll.",
       })
     } catch (error) {
@@ -250,7 +250,9 @@ export default function LogsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Time Log History</CardTitle>
-          <p className="text-sm text-slate-500">Overtime triggers after {minHours} hours on a single shift.</p>
+          <p className="text-sm text-slate-500">
+            Mark employees as "No Show" if they clocked out but were marked absent, or create a manual entry if they didn't clock in at all on a scheduled day.
+          </p>
         </CardHeader>
         <CardContent>
           {timeLogs.length === 0 ? (
@@ -291,7 +293,7 @@ export default function LogsPage() {
                         </span>
                       </td>
                       <td className="py-4 text-right">
-                        {!log.timeOut && !log.isAbsent && (
+                        {log.timeOut && !log.isAbsent && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -306,7 +308,7 @@ export default function LogsPage() {
                             ) : (
                               <>
                                 <AlertCircle className="mr-2 h-4 w-4" />
-                                Mark Absent
+                                Mark as No Show
                               </>
                             )}
                           </Button>

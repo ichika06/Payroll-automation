@@ -1,10 +1,5 @@
 
 
-export async function generatePayslipPDF(payslipData) {
-  if (!payslipData) {
-    throw new Error("Payslip data is required")
-  }
-
 function formatCurrency(amount) {
   if (typeof amount !== "number") {
     return "N/A"
@@ -15,6 +10,11 @@ function formatCurrency(amount) {
   })
   return `PHP ${formatted}`
 }
+
+export async function generatePayslipPDF(payslipData) {
+  if (!payslipData) {
+    throw new Error("Payslip data is required")
+  }
 
   try {
     const [{ default: PDFDocument }, { default: blobStream }] = await Promise.all([
@@ -95,13 +95,17 @@ function formatCurrency(amount) {
     }
 
     // Header
-    doc.font("Helvetica-Bold").fontSize(18).fillColor(primaryColor).text("Payroll Payslip", {
+    doc.font("Helvetica-BoldOblique").fontSize(18).fillColor(primaryColor).text("Payslip", {
       align: "center",
     })
     doc.moveDown(0.5)
-    doc.font("Helvetica").fontSize(10).fillColor(mutedColor).text("Generated: " + new Date().toLocaleString(), {
-      align: "center",
-    })
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor(mutedColor)
+      .text(new Date().toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }), {
+        align: "center",
+      })
     doc.moveDown(1)
 
     // Employee Info
@@ -156,7 +160,13 @@ function formatCurrency(amount) {
     const attendanceLines = [
       ["Working Days", payslipData.workingDays ?? "–"],
       ["Worked Days", payslipData.workedDays ?? "–"],
-      ["Paid Leave Days", payslipData.paidLeaveDays],
+      [
+        "Paid Leave Days",
+        (payslipData.paidLeaveDays || 0) +
+          (payslipData.leavePaymentRecords && Array.isArray(payslipData.leavePaymentRecords)
+            ? payslipData.leavePaymentRecords.reduce((sum, r) => sum + (r.numberOfDays || 0), 0)
+            : 0),
+      ],
       ["Unpaid Leave Days", payslipData.unpaidLeaveDays],
       ["Absence Days", payslipData.absenceDays],
     ]
@@ -177,6 +187,60 @@ function formatCurrency(amount) {
     writeDateList("Paid Leave Dates", payslipData.paidLeaveDates)
     writeDateList("Unpaid Leave Dates", payslipData.unpaidLeaveDates)
     writeDateList("Absence Dates", payslipData.absenceDates)
+
+    // Leave Payment Records (if any)
+    if (
+      payslipData.leavePaymentRecords &&
+      Array.isArray(payslipData.leavePaymentRecords) &&
+      payslipData.leavePaymentRecords.length > 0
+    ) {
+      doc.moveDown(0.8)
+      addDivider()
+      addSectionTitle("Leave Payments")
+
+      payslipData.leavePaymentRecords.forEach((record, index) => {
+        doc.font("Helvetica").fontSize(10).fillColor(primaryColor)
+        doc.text(`${index + 1}. ${record.leaveType || "Leave Payment"}`, doc.page.margins.left)
+        doc.font("Helvetica").fontSize(9).fillColor(mutedColor)
+
+        if (record.numberOfDays) {
+          doc.text(`   Days: ${record.numberOfDays}`, doc.page.margins.left)
+        }
+        if (record.ratePerDay) {
+          doc.text(`   Rate: ${formatCurrency(record.ratePerDay)}/day`, doc.page.margins.left)
+        }
+        if (record.amount !== undefined) {
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(10)
+            .fillColor(primaryColor)
+            .text(`   Amount: ${formatCurrency(record.amount)}`, doc.page.margins.left)
+        }
+        if (record.date) {
+          const paymentDate = new Date(record.date)
+          if (!Number.isNaN(paymentDate.getTime())) {
+            doc
+              .font("Helvetica")
+              .fontSize(9)
+              .fillColor(mutedColor)
+              .text(
+                `   Paid: ${paymentDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
+                doc.page.margins.left,
+              )
+          }
+        }
+        doc.moveDown(0.3)
+      })
+
+      doc.moveDown(0.3)
+      addKeyValue(
+        "Total Leave Payments",
+        formatCurrency(
+          payslipData.leavePaymentRecords.reduce((sum, record) => sum + (record.amount || 0), 0),
+        ),
+        { bold: true },
+      )
+    }
 
     // End PDF
     doc.end()

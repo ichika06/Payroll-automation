@@ -84,12 +84,12 @@ export function EmployeeSidebar() {
           <Badge className="mb-1">{employee?.department ?? "No Department"}</Badge>
         </div>
         <div className="flex justify-between gap-2">
-          {employee.startingShift && (
+          {employee?.startingShift && (
             <Badge className="rounded-full bg-indigo-200 px-3 py-1 text-sm text-indigo-600">
               Start: {employee.startingShift}
             </Badge>
           )}
-          {employee.endingShift && (
+          {employee?.endingShift && (
             <Badge className="rounded-full bg-emerald-200 px-3 py-1 text-sm text-green-700">
               End: {employee.endingShift}
             </Badge>

@@ -13,12 +13,17 @@ import {
   getPayrollSettings,
   updateTimeLog,
   getApprovedLeavesInRange,
+  addLeavePayment,
+  getLeavePaymentsByEmployeeAndPayroll,
+  deleteLeavePayment,
 } from "@/lib/firebase-service"
 import { generatePayslipPDF } from "@/lib/payslip-export"
 import { toast } from "sonner"
 import { Timestamp } from "firebase/firestore"
 import { Spinner } from "@/components/ui/spinner"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 
 function computePayrollMetrics(timeLogs, period, minHoursThreshold = 8) {
   if (!Array.isArray(timeLogs)) {
@@ -517,6 +522,15 @@ export default function PayrollPage() {
   const [minHours, setMinHours] = useState(8)
   const [payslipPayroll, setPayslipPayroll] = useState(null)
   const [downloadingPayslip, setDownloadingPayslip] = useState(false)
+  const [leavePaymentRecords, setLeavePaymentRecords] = useState([])
+  const [leavePaymentDialogOpen, setLeavePaymentDialogOpen] = useState(false)
+  const [deletingLeavePaymentId, setDeletingLeavePaymentId] = useState(null)
+  const [leavePaymentForm, setLeavePaymentForm] = useState({
+    leaveType: "",
+    numberOfDays: "",
+    ratePerDay: "",
+  })
+  const [processingLeavePayment, setProcessingLeavePayment] = useState(false)
 
   const activePayslip = payslipPayroll
   let payslipData = null
@@ -593,6 +607,7 @@ export default function PayrollPage() {
         attendanceSummary.dailyRate ??
         toMoney((activePayslip.hourlyRate || 0) * (typeof minHours === "number" ? minHours : 8)),
       coverage: attendanceSummary.periodRange || null,
+      leavePaymentRecords,
     }
   }
 
@@ -791,6 +806,7 @@ export default function PayrollPage() {
         const newPayroll = updatedPayrolls.find((p) => p.id === payrollId)
         if (newPayroll) {
           setPayslipPayroll(newPayroll)
+          await loadLeavePayments(newPayroll)
         }
         
         if (paymentInitiated) {
@@ -895,6 +911,7 @@ export default function PayrollPage() {
       const newPayroll = updatedPayrolls.find((p) => p.id === payrollId)
       if (newPayroll) {
         setPayslipPayroll(newPayroll)
+        await loadLeavePayments(newPayroll)
       }
       
       if (paymentInitiated) {
@@ -1012,6 +1029,7 @@ export default function PayrollPage() {
       const newPayroll = updatedPayrolls.find((p) => p.id === payrollId)
       if (newPayroll) {
         setPayslipPayroll(newPayroll)
+        await loadLeavePayments(newPayroll)
       }
 
       const autoLabel = formatAutoApprovalLabel(autoApprovalScheduledAt)
@@ -1182,6 +1200,17 @@ export default function PayrollPage() {
 
       netPay = Math.max(toMoney(grossPay - tax - combinedDeductions), 0)
 
+      // Add leave payments to net pay
+      try {
+        const leavePayments = await getLeavePaymentsByEmployeeAndPayroll(payroll.employeeId, payroll.id)
+        if (leavePayments && Array.isArray(leavePayments) && leavePayments.length > 0) {
+          const totalLeavePayments = toMoney(leavePayments.reduce((sum, payment) => sum + (payment.amount || 0), 0))
+          netPay = toMoney(netPay + totalLeavePayments)
+        }
+      } catch (error) {
+        console.warn("Could not fetch leave payments for payroll settlement:", error)
+      }
+
       const nowTs = Timestamp.now()
 
       await updatePayroll(payroll.id, {
@@ -1252,6 +1281,18 @@ export default function PayrollPage() {
 
   function handleOpenPayslip(payroll) {
     setPayslipPayroll(payroll)
+    loadLeavePayments(payroll)
+  }
+
+  async function loadLeavePayments(payroll) {
+    if (!payroll) return
+    try {
+      const payments = await getLeavePaymentsByEmployeeAndPayroll(payroll.employeeId, payroll.id)
+      setLeavePaymentRecords(payments)
+    } catch (error) {
+      console.error("Error loading leave payments:", error)
+      setLeavePaymentRecords([])
+    }
   }
 
   function handleClosePayslip() {
@@ -1277,6 +1318,108 @@ export default function PayrollPage() {
       })
     } finally {
       setDownloadingPayslip(false)
+    }
+  }
+
+  function handleOpenLeavePaymentDialog() {
+    if (!payslipPayroll) return
+    setLeavePaymentForm({
+      leaveType: "",
+      numberOfDays: "",
+      ratePerDay: payslipPayroll.attendanceSummary?.dailyRate || payslipPayroll.hourlyRate * 8 || 0,
+    })
+    setLeavePaymentDialogOpen(true)
+  }
+
+  function handleCloseLeavePaymentDialog() {
+    setLeavePaymentDialogOpen(false)
+    setLeavePaymentForm({
+      leaveType: "",
+      numberOfDays: "",
+      ratePerDay: "",
+    })
+  }
+
+  async function handleSubmitLeavePayment() {
+    if (!payslipPayroll) return
+
+    const numberOfDays = Number.parseFloat(leavePaymentForm.numberOfDays)
+    const ratePerDay = Number.parseFloat(leavePaymentForm.ratePerDay)
+    const leaveType = leavePaymentForm.leaveType.trim()
+
+    if (!leaveType) {
+      toast.error("Leave type is required")
+      return
+    }
+
+    if (!Number.isFinite(numberOfDays) || numberOfDays <= 0) {
+      toast.error("Number of days must be a positive number")
+      return
+    }
+
+    if (!Number.isFinite(ratePerDay) || ratePerDay <= 0) {
+      toast.error("Rate per day must be a positive number")
+      return
+    }
+
+    setProcessingLeavePayment(true)
+    try {
+      const amount = Number.parseFloat((numberOfDays * ratePerDay).toFixed(2))
+
+      // Add leave payment record
+      const paymentId = await addLeavePayment({
+        employeeId: payslipPayroll.employeeId,
+        payrollId: payslipPayroll.id,
+        leaveType,
+        numberOfDays,
+        ratePerDay,
+        amount,
+        date: Timestamp.now(),
+      })
+
+      toast.success("Leave payment recorded", {
+        description: `₱${amount.toFixed(2)} for ${numberOfDays} days of ${leaveType}`,
+      })
+
+      // Reload leave payments
+      const payments = await getLeavePaymentsByEmployeeAndPayroll(payslipPayroll.employeeId, payslipPayroll.id)
+      setLeavePaymentRecords(payments)
+
+      handleCloseLeavePaymentDialog()
+    } catch (error) {
+      console.error("Error recording leave payment:", error)
+      toast.error("Failed to record leave payment", {
+        description: error?.message || "Please try again.",
+      })
+    } finally {
+      setProcessingLeavePayment(false)
+    }
+  }
+
+  async function handleDeleteLeavePayment(paymentId) {
+    if (!confirm("Are you sure you want to delete this leave payment?")) {
+      return
+    }
+
+    setDeletingLeavePaymentId(paymentId)
+    try {
+      await deleteLeavePayment(paymentId)
+      toast.success("Leave payment deleted", {
+        description: "The leave payment has been removed.",
+      })
+
+      // Reload leave payments
+      if (payslipPayroll) {
+        const payments = await getLeavePaymentsByEmployeeAndPayroll(payslipPayroll.employeeId, payslipPayroll.id)
+        setLeavePaymentRecords(payments)
+      }
+    } catch (error) {
+      console.error("Error deleting leave payment:", error)
+      toast.error("Failed to delete leave payment", {
+        description: error?.message || "Please try again.",
+      })
+    } finally {
+      setDeletingLeavePaymentId(null)
     }
   }
 
@@ -1395,7 +1538,7 @@ export default function PayrollPage() {
       </Card>
 
       <Dialog open={Boolean(payslipPayroll)} onOpenChange={(open) => (open ? null : handleClosePayslip())}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl h-screen flex flex-col">
           <DialogHeader>
             <DialogTitle>Payslip</DialogTitle>
             {payslipData && (
@@ -1405,8 +1548,9 @@ export default function PayrollPage() {
             )}
           </DialogHeader>
 
-          {payslipData ? (
-            <div className="space-y-6">
+          <div className="flex-1 overflow-y-auto">
+            {payslipData ? (
+              <div className="space-y-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="rounded-lg border border-slate-200 p-4">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Earnings</h3>
@@ -1509,7 +1653,12 @@ export default function PayrollPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Paid Leave Days</span>
-                    <span>{payslipData.paidLeaveDays}</span>
+                    <span>
+                      {payslipData.paidLeaveDays + 
+                        (leavePaymentRecords.length > 0 
+                          ? leavePaymentRecords.reduce((sum, r) => sum + (r.numberOfDays || 0), 0)
+                          : 0)}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Unpaid Leave Days</span>
@@ -1536,12 +1685,67 @@ export default function PayrollPage() {
                   )}
                 </div>
               </div>
+
+              {leavePaymentRecords.length > 0 && (
+                <div className="rounded-lg border border-slate-200  p-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Leave Payments</h3>
+                  <div className="mt-3 space-y-3">
+                    {leavePaymentRecords.map((record, index) => (
+                      <div key={record.id} className="border-t border-slate-200 pt-2 first:border-t-0 first:pt-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-slate-900">{record.leaveType}</p>
+                            <p className="text-xs text-slate-700">
+                              {record.numberOfDays} day{record.numberOfDays !== 1 ? "s" : ""} | ₱{record.ratePerDay?.toFixed(2) || "0.00"}/day
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-slate-900">₱{record.amount?.toFixed(2) || "0.00"}</span>
+                            {payslipPayroll?.status !== "paid" && (
+                              <button
+                                onClick={() => handleDeleteLeavePayment(record.id)}
+                                disabled={deletingLeavePaymentId === record.id}
+                                className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                title="Cancel"
+                              >
+                                {deletingLeavePaymentId === record.id ? (
+                                  <span className="text-xs">...</span>
+                                ) : (
+                                  <span className="text-lg font-bold">×</span>
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-slate-200 pt-2 mt-3">
+                    <div className="flex items-center justify-between font-semibold text-slate-900">
+                      <span>Total Leave Payments</span>
+                      <span>
+                        ₱{leavePaymentRecords.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-sm text-slate-600">Unable to load payslip details.</p>
           )}
+          </div>
 
           <DialogFooter>
+            {payslipPayroll?.status !== "paid" && (
+              <Button
+                onClick={handleOpenLeavePaymentDialog}
+                variant="secondary"
+              >
+                Add Leave Payment
+              </Button>
+            )}
             {payslipPayroll?.status === "paid" && (
               <Button onClick={handleDownloadPayslip} disabled={downloadingPayslip || !payslipData}>
                 {downloadingPayslip ? "Preparing PDF..." : "Download PDF"}
@@ -1553,6 +1757,98 @@ export default function PayrollPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={leavePaymentDialogOpen} onOpenChange={setLeavePaymentDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Leave Payment</DialogTitle>
+            {payslipPayroll && (
+              <DialogDescription>
+                Leave payment for {payslipPayroll.employeeName}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="leaveType">Leave Type *</Label>
+              <Input
+                id="leaveType"
+                placeholder="e.g., Vacation Leave, Sick Leave, Paternity Leave"
+                value={leavePaymentForm.leaveType}
+                onChange={(e) =>
+                  setLeavePaymentForm({ ...leavePaymentForm, leaveType: e.target.value })
+                }
+                disabled={processingLeavePayment}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="numberOfDays">Number of Days *</Label>
+                <Input
+                  id="numberOfDays"
+                  type="number"
+                  placeholder="e.g., 2.5"
+                  step="0.5"
+                  min="0"
+                  value={leavePaymentForm.numberOfDays}
+                  onChange={(e) =>
+                    setLeavePaymentForm({
+                      ...leavePaymentForm,
+                      numberOfDays: e.target.value,
+                    })
+                  }
+                  disabled={processingLeavePayment}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ratePerDay">Rate per Day (₱) *</Label>
+                <Input
+                  id="ratePerDay"
+                  type="number"
+                  placeholder="Daily rate"
+                  step="0.01"
+                  min="0"
+                  value={leavePaymentForm.ratePerDay}
+                  onChange={(e) =>
+                    setLeavePaymentForm({
+                      ...leavePaymentForm,
+                      ratePerDay: e.target.value,
+                    })
+                  }
+                  disabled={processingLeavePayment}
+                />
+              </div>
+            </div>
+
+            {leavePaymentForm.numberOfDays && leavePaymentForm.ratePerDay && (
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-sm text-slate-600">
+                  Total Amount: <span className="font-semibold text-slate-900">
+                    ₱{(parseFloat(leavePaymentForm.numberOfDays || 0) * parseFloat(leavePaymentForm.ratePerDay || 0)).toFixed(2)}
+                  </span>
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={handleCloseLeavePaymentDialog}
+              disabled={processingLeavePayment}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSubmitLeavePayment} disabled={processingLeavePayment}>
+              {processingLeavePayment ? "Recording..." : "Record Payment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
+
