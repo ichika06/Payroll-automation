@@ -229,31 +229,6 @@ export default function EmployeeDashboard() {
         <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
       </div>
 
-      {employee && (
-        <div className="mb-8 p-4 rounded-lg border border-slate-200 bg-slate-50">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-slate-900">{employee.name}</h2>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {employee.position && (
-              <div className="rounded-full bg-slate-900 px-3 py-1 text-sm text-white">
-                {employee.position}
-              </div>
-            )}
-            {employee.startingShift && (
-              <div className="rounded-full bg-blue-100 px-3 py-1 text-sm text-blue-700">
-                Start: {employee.startingShift}
-              </div>
-            )}
-            {employee.endingShift && (
-              <div className="rounded-full bg-green-100 px-3 py-1 text-sm text-green-700">
-                End: {employee.endingShift}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
