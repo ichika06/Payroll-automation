@@ -20,11 +20,9 @@ export default function CreateAdminPage() {
       const adminEmail = "payroll2025@admin.com"
       const adminPassword = "payrollpayroll2025admin!!"
 
-      // Create admin user
       const userCredential = await createUserWithEmailAndPassword(auth, adminEmail, adminPassword)
       const user = userCredential.user
 
-      // Add admin data to Firestore
       await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         email: adminEmail,
